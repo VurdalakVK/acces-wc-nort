@@ -123,12 +123,29 @@
     .btn-secondary { background: #2d3748; color: #a0aec0; }
     .section-title { color: #718096; }
     .history-badge { background: #1a3a6e; }
+    .history-title { color: #e2e8f0; }
+    .history-meta { color: #a0aec0; }
     .result-icon { background: #1a3a6e; }
+    .result-subtitle { color: #a0aec0; }
     .settings-input, .settings-input-full { background: #1a1f2e; border-color: #2d3748; color: #e2e8f0; }
+    .modal-title { color: #e2e8f0; }
+    .modal-close { background: #2d3748; color: #e2e8f0; }
   }
 </style>
 </head>
 <body>
+
+<!-- EMAIL GATE -->
+<div id="email-gate" style="display:none; position:fixed; inset:0; background:rgba(26,31,46,0.96); z-index:500; align-items:center; justify-content:center; padding:20px;">
+  <div style="background:white; border-radius:16px; padding:28px 24px; max-width:380px; width:100%; box-shadow:0 10px 40px rgba(0,0,0,0.3);">
+    <div style="font-size:40px; text-align:center; margin-bottom:8px;">📧</div>
+    <h2 style="font-size:18px; font-weight:700; color:#2d3748; text-align:center; margin-bottom:8px;">Registra tu correo</h2>
+    <p style="font-size:13px; color:#718096; text-align:center; margin-bottom:20px;">Es obligatorio para usar la aplicación. Se guardará junto con cada turno.</p>
+    <input type="email" id="gate-email" placeholder="tu@correo.com" style="width:100%; padding:14px 16px; border:1.5px solid #e2e8f0; border-radius:10px; font-size:16px; margin-bottom:12px;" autocomplete="email">
+    <div id="gate-error" style="color:#e53e3e; font-size:13px; margin-bottom:10px; display:none;"></div>
+    <button class="btn btn-primary" onclick="guardarEmailGate()">Continuar</button>
+  </div>
+</div>
 
 <div class="header">
   <h1>🚻 Control de Accesos</h1>
@@ -143,17 +160,29 @@
 
 <div class="container">
 
+  <div class="sync-status sync-hidden" id="global-sync-status"></div>
+
+
   <!-- FORM TAB -->
   <div id="tab-form">
     <div id="form-view">
       <div class="card">
         <div class="card-title">📍 Identificación del Turno</div>
-        <div class="field">
-          <label>Baño</label>
-          <select id="bano">
-            <option value="Baño A">Baño A</option>
-            <option value="Baño C">Baño C</option>
-          </select>
+        <div class="row2">
+          <div class="field">
+            <label>Baño</label>
+            <select id="bano">
+              <option value="Baño A">Baño A</option>
+              <option value="Baño C">Baño C</option>
+            </select>
+          </div>
+          <div class="field">
+            <label>Turno</label>
+            <select id="turno">
+              <option value="Mañana">🌅 Mañana</option>
+              <option value="Tarde">🌇 Tarde</option>
+            </select>
+          </div>
         </div>
       </div>
 
@@ -190,7 +219,7 @@
         <div class="field">
           <label>Sobrante Turno Anterior</label>
           <input type="number" id="sobrante-anterior" placeholder="0.00" inputmode="decimal" oninput="calcular()">
-          <div class="hint">Solo informativo, no afecta la diferencia final</div>
+          <div class="hint">Se resta del reportado: diferencia = reportado − estimado − sobrante</div>
         </div>
         <div class="field">
           <label>Monto Estimado</label>
@@ -214,7 +243,7 @@
           <div class="result-icon">🚻</div>
           <div>
             <div class="result-title" id="r-bano">Baño A</div>
-            <div class="result-subtitle" id="r-fecha">—</div>
+            <div class="result-subtitle"><span id="r-turno">—</span> · <span id="r-fecha">—</span></div>
           </div>
         </div>
 
@@ -246,8 +275,12 @@
           <span class="stat-value" id="r-estimado">—</span>
         </div>
         <div class="stat-row">
-          <span class="stat-label">Sobrante Anterior <span class="tag tag-neutral" style="font-size:11px;">informativo</span></span>
+          <span class="stat-label">Sobrante Anterior</span>
           <span class="stat-value" id="r-sobrante-ant">—</span>
+        </div>
+        <div class="stat-row">
+          <span class="stat-label">Reportado por</span>
+          <span class="stat-value" id="r-email" style="font-size:13px;">—</span>
         </div>
         <div class="stat-row" style="background: #f7fafc; border-radius: 8px; padding: 12px; margin-top: 8px;">
           <span class="stat-label" style="font-weight: 600; color: #2d3748;">Diferencia Final</span>
@@ -262,6 +295,7 @@
 
   <!-- HISTORY TAB -->
   <div id="tab-history" style="display:none;">
+    <button class="btn btn-secondary" style="margin-bottom:12px;" onclick="sincronizarDesdeSheets()">🔄 Sincronizar desde Google Sheets</button>
     <div id="history-list"></div>
   </div>
 
@@ -382,6 +416,7 @@ function guardarSettings() {
   localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings));
   document.getElementById('tarifa-hint').textContent = settings.tarifa.toFixed(2);
   calcular();
+  iniciarAutoRefresh();
 }
 
 function calcular() {
@@ -397,12 +432,18 @@ function calcular() {
 }
 
 function guardarTurno() {
+  if (!settings.email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(settings.email)) {
+    alert('Debes registrar un correo electrónico válido antes de guardar.');
+    mostrarEmailGate();
+    return;
+  }
   const inicio = parseFloat(document.getElementById('inicio').value);
   const fin    = parseFloat(document.getElementById('fin').value);
   if (isNaN(inicio) || isNaN(fin)) { alert('Por favor ingresa los contadores de inicio y fin.'); return; }
   if (fin < inicio) { alert('El contador final no puede ser menor al inicial.'); return; }
 
   const bano              = document.getElementById('bano').value;
+  const turno             = document.getElementById('turno').value;
   const cortesias         = parseFloat(document.getElementById('cortesias').value) || 0;
   const montoReportado    = parseFloat(document.getElementById('monto-reportado').value) || 0;
   const sobranteAnterior  = parseFloat(document.getElementById('sobrante-anterior').value) || 0;
@@ -410,17 +451,15 @@ function guardarTurno() {
   const pagantes          = Math.max(0, usuarios - cortesias);
   const montoEstimado     = pagantes * settings.tarifa;
 
-  // ─── DIFERENCIA FINAL: sólo Reportado − Estimado ───────────────────
-  // El sobrante se muestra en pantalla pero NO afecta este cálculo.
   const difAntes   = montoReportado - montoEstimado;
-  const diferencia = difAntes;   // ← sin sobrante
-  // ────────────────────────────────────────────────────────────────────
+  const diferencia = difAntes - sobranteAnterior;
 
   const record = {
-    id: Date.now(),
+    id: Date.now().toString() + '-' + Math.random().toString(36).slice(2,8),
     fecha: new Date().toISOString(),
-    bano, inicio, fin, usuarios, cortesias,
-    montoReportado, montoEstimado, sobranteAnterior, difAntes, diferencia
+    bano, turno, inicio, fin, usuarios, cortesias,
+    montoReportado, montoEstimado, sobranteAnterior, difAntes, diferencia,
+    email: settings.email
   };
 
   records.unshift(record);
@@ -435,15 +474,67 @@ function guardarTurno() {
 
 // ── Google Sheets sync ──────────────────────────────────────────────────
 function setSyncStatus(type, msg) {
-  const el = document.getElementById('sync-status');
-  el.className = 'sync-status ' + type;
-  el.textContent = msg;
+  ['sync-status','global-sync-status'].forEach(id => {
+    const el = document.getElementById(id);
+    if (!el) return;
+    el.className = 'sync-status ' + type;
+    el.textContent = msg;
+  });
+}
+function ocultarSyncStatus() {
+  ['sync-status','global-sync-status'].forEach(id => {
+    const el = document.getElementById(id);
+    if (el) el.className = 'sync-status sync-hidden';
+  });
+}
+
+async function sincronizarDesdeSheets() {
+  if (!settings.sheetsUrl) {
+    alert('Configura la URL del Apps Script en Ajustes.');
+    return;
+  }
+  setSyncStatus('syncing', '⏳ Descargando historial…');
+  try {
+    const res = await fetch(settings.sheetsUrl + '?t=' + Date.now());
+    const json = await res.json();
+    if (!json || !json.ok) { setSyncStatus('sync-error', '⚠ Respuesta inesperada'); return; }
+    const remote = (json.records || []).filter(r => r && r.id && String(r.id) !== 'undefined').map(r => ({
+      id:               String(r.id),
+      fecha:            r.fechaISO || r.fecha,
+      bano:             r.bano,
+      turno:            r.turno,
+      inicio:           Number(r.inicio) || 0,
+      fin:              Number(r.fin) || 0,
+      usuarios:         Number(r.usuarios) || 0,
+      cortesias:        Number(r.cortesias) || 0,
+      montoReportado:   Number(r.montoReportado) || 0,
+      montoEstimado:    Number(r.montoEstimado) || 0,
+      sobranteAnterior: Number(r.sobranteAnterior) || 0,
+      diferencia:       Number(r.diferencia) || 0,
+      difAntes:         (Number(r.montoReportado)||0) - (Number(r.montoEstimado)||0),
+      email:            r.email || ''
+    }));
+    const byId = {};
+    remote.forEach(r => { byId[r.id] = r; });
+    records.forEach(r => { const k = String(r.id); if (!byId[k]) byId[k] = r; });
+    records = Object.values(byId).sort((a,b) => new Date(b.fecha) - new Date(a.fecha));
+    saveData();
+    if (activeTab === 'history') renderHistory();
+    setSyncStatus('synced', '✔ Sincronizado (' + remote.length + ' registros)');
+    setTimeout(ocultarSyncStatus, 2500);
+  } catch(e) {
+    setSyncStatus('sync-error', '✗ No se pudo descargar');
+    console.error(e);
+  }
 }
 
 async function sincronizarSheets(record) {
   setSyncStatus('syncing', '⏳ Sincronizando con Google Sheets…');
   const payload = {
+    id:               record.id,
+    fechaISO:         record.fecha,
     bano:             record.bano,
+    turno:            record.turno,
     inicio:           record.inicio,
     fin:              record.fin,
     usuarios:         record.usuarios,
@@ -503,6 +594,7 @@ async function probarConexion() {
 
 function mostrarResultado(r) {
   document.getElementById('r-bano').textContent       = r.bano;
+  document.getElementById('r-turno').textContent      = (r.turno === 'Mañana' ? '🌅 ' : '🌇 ') + (r.turno || '—');
   document.getElementById('r-fecha').textContent      = fmtDate(r.fecha);
   document.getElementById('r-usuarios').textContent   = r.usuarios;
   document.getElementById('r-cortesias').textContent  = r.cortesias;
@@ -511,6 +603,7 @@ function mostrarResultado(r) {
   document.getElementById('r-reportado').textContent  = fmt(r.montoReportado);
   document.getElementById('r-estimado').textContent   = fmt(r.montoEstimado);
   document.getElementById('r-sobrante-ant').textContent = fmt(r.sobranteAnterior);
+  document.getElementById('r-email').textContent      = r.email || '—';
 
   const difEl = document.getElementById('r-diferencia');
   difEl.textContent = fmt(r.diferencia);
@@ -557,11 +650,12 @@ function renderHistory() {
     recs.forEach(r => {
       const difClass = r.diferencia > 0 ? '#38a169' : r.diferencia < 0 ? '#e53e3e' : '#718096';
       html += `
-        <div class="history-item" onclick="verDetalle(${r.id})">
+        <div class="history-item" onclick="verDetalle('${r.id}')">
           <div class="history-badge">${r.bano.replace('Baño ','')}</div>
           <div class="history-info">
-            <div class="history-title">${r.bano} — ${r.usuarios} usuarios</div>
+            <div class="history-title">${r.bano} · ${r.turno || '—'} — ${r.usuarios} usuarios</div>
             <div class="history-meta">${new Date(r.fecha).toLocaleTimeString('es-MX', {hour:'2-digit',minute:'2-digit'})} · Reportado: ${fmt(r.montoReportado)}</div>
+            <div class="history-meta" style="font-size:11px;">👤 ${r.email || '—'}</div>
           </div>
           <div style="text-align:right; flex-shrink:0;">
             <div style="font-size:15px; font-weight:700; color:${difClass};">${fmt(r.diferencia)}</div>
@@ -574,9 +668,9 @@ function renderHistory() {
 }
 
 function verDetalle(id) {
-  const r = records.find(x => x.id === id);
+  const r = records.find(x => String(x.id) === String(id));
   if (!r) return;
-  document.getElementById('modal-title').textContent = r.bano + ' · ' + fmtDate(r.fecha);
+  document.getElementById('modal-title').textContent = r.bano + ' · ' + (r.turno || '—') + ' · ' + fmtDate(r.fecha);
   const difColor = r.diferencia > 0 ? '#38a169' : r.diferencia < 0 ? '#e53e3e' : '#718096';
   document.getElementById('modal-body').innerHTML = `
     <div class="metrics-grid">
@@ -587,12 +681,13 @@ function verDetalle(id) {
     <div class="stat-row"><span class="stat-label">Contador Fin</span><span class="stat-value">${r.fin}</span></div>
     <div class="stat-row"><span class="stat-label">Monto Reportado</span><span class="stat-value">${fmt(r.montoReportado)}</span></div>
     <div class="stat-row"><span class="stat-label">Monto Estimado</span><span class="stat-value">${fmt(r.montoEstimado)}</span></div>
-    <div class="stat-row"><span class="stat-label">Sobrante Anterior <span class="tag tag-neutral" style="font-size:10px;">informativo</span></span><span class="stat-value">${fmt(r.sobranteAnterior)}</span></div>
+    <div class="stat-row"><span class="stat-label">Sobrante Anterior</span><span class="stat-value">${fmt(r.sobranteAnterior)}</span></div>
+    <div class="stat-row"><span class="stat-label">Reportado por</span><span class="stat-value" style="font-size:13px;">${r.email || '—'}</span></div>
     <div class="stat-row" style="background:#f7fafc;border-radius:8px;padding:12px;margin-top:8px;">
       <span class="stat-label" style="font-weight:600">Diferencia Final</span>
       <span class="stat-value" style="color:${difColor};font-size:18px;font-weight:700;">${fmt(r.diferencia)}</span>
     </div>
-    <button class="btn-danger" style="margin-top:16px;" onclick="borrarRegistro(${r.id})">Eliminar este registro</button>
+    <button class="btn-danger" style="margin-top:16px;" onclick="borrarRegistro('${r.id}')">Eliminar este registro</button>
   `;
   document.getElementById('modal').style.display = 'flex';
 }
@@ -603,7 +698,7 @@ function cerrarModal(e) {
 
 function borrarRegistro(id) {
   if (!confirm('¿Eliminar este registro?')) return;
-  records = records.filter(r => r.id !== id);
+  records = records.filter(r => String(r.id) !== String(id));
   saveData();
   document.getElementById('modal').style.display = 'none';
   renderHistory();
@@ -618,12 +713,12 @@ function borrarTodo() {
 
 function exportarCSV() {
   if (records.length === 0) { alert('No hay datos para exportar.'); return; }
-  const cols = ['Baño','Contador Inicio','Contador Fin','Usuarios Estimados','Cortesías','Monto Reportado','Monto Estimado','Diferencia Antes de Sobrante','Sobrante Turno Anterior','Diferencia','Marca Temporal','Correo'];
+  const cols = ['Baño','Turno','Contador Inicio','Contador Fin','Usuarios Estimados','Cortesías','Monto Reportado','Monto Estimado','Diferencia Antes de Sobrante','Sobrante Turno Anterior','Diferencia','Marca Temporal','Correo'];
   const rows = records.map(r => [
-    r.bano, r.inicio, r.fin, r.usuarios, r.cortesias,
+    r.bano, r.turno || '', r.inicio, r.fin, r.usuarios, r.cortesias,
     r.montoReportado.toFixed(2), r.montoEstimado.toFixed(2),
     r.difAntes.toFixed(2), r.sobranteAnterior.toFixed(2),
-    r.diferencia.toFixed(2), fmtDate(r.fecha), settings.email || ''
+    r.diferencia.toFixed(2), fmtDate(r.fecha), r.email || settings.email || ''
   ].join(','));
   const csv = [cols.join(','), ...rows].join('\n');
   const a = document.createElement('a');
@@ -643,9 +738,52 @@ function updateDate() {
   document.getElementById('header-date').textContent = new Date().toLocaleDateString('es-MX', {weekday:'long', day:'numeric', month:'long', year:'numeric'});
 }
 
+function emailValido(e) { return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(e); }
+
+function mostrarEmailGate() {
+  document.getElementById('email-gate').style.display = 'flex';
+  setTimeout(() => document.getElementById('gate-email').focus(), 100);
+}
+
+function guardarEmailGate() {
+  const v = document.getElementById('gate-email').value.trim();
+  const errEl = document.getElementById('gate-error');
+  if (!emailValido(v)) {
+    errEl.textContent = '⚠ Ingresa un correo válido.';
+    errEl.style.display = 'block';
+    return;
+  }
+  settings.email = v;
+  localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings));
+  document.getElementById('setting-email').value = v;
+  document.getElementById('email-gate').style.display = 'none';
+  if (settings.sheetsUrl) { sincronizarDesdeSheets(); iniciarAutoRefresh(); }
+}
+
+function autoSeleccionarTurno() {
+  const h = new Date().getHours();
+  document.getElementById('turno').value = (h < 14) ? 'Mañana' : 'Tarde';
+}
+
+const AUTO_REFRESH_MS = 60000;
+let autoRefreshTimer = null;
+function iniciarAutoRefresh() {
+  if (autoRefreshTimer) clearInterval(autoRefreshTimer);
+  if (!settings.sheetsUrl) return;
+  autoRefreshTimer = setInterval(() => {
+    if (document.visibilityState === 'visible') sincronizarDesdeSheets();
+  }, AUTO_REFRESH_MS);
+}
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'visible' && settings.sheetsUrl) sincronizarDesdeSheets();
+});
+
 loadData();
 updateDate();
+autoSeleccionarTurno();
 calcular();
+if (!settings.email || !emailValido(settings.email)) mostrarEmailGate();
+else if (settings.sheetsUrl) { sincronizarDesdeSheets(); iniciarAutoRefresh(); }
 </script>
 </body>
 </html>
